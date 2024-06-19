@@ -2,3 +2,4 @@ tts-service
 
 /target
 .*
+tts-service.sh

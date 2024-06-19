@@ -8,7 +8,7 @@
 
 use std::{fmt::Display, str::FromStr, sync::OnceLock};
 
-use axum::{http::header::HeaderValue, response::Response, routing::get, Json};
+use axum::{http::header::HeaderValue, response::Response, response::Html, routing::get, Json};
 use bytes::Bytes;
 use deadpool_redis::redis::AsyncCommands;
 use serde_json::to_value;
@@ -18,10 +18,9 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod espeak;
-mod gcloud;
-mod gtts;
 mod polly;
 mod translation;
+mod wadiwayan;
 
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
@@ -47,17 +46,13 @@ async fn get_voices(
 
     Ok(axum::Json(if raw {
         match mode {
-            TTSMode::gTTS => to_value(gtts::get_raw_voices()),
             TTSMode::eSpeak => to_value(espeak::get_voices()),
             TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
-            TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud).await?),
         }?
     } else {
         to_value(match mode {
-            TTSMode::gTTS => gtts::get_voices(),
             TTSMode::eSpeak => espeak::get_voices().to_vec(),
             TTSMode::Polly => polly::get_voices(&state.polly).await?,
-            TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
         })?
     }))
 }
@@ -158,7 +153,6 @@ async fn get_tts(
     };
 
     let (audio, content_type) = match mode {
-        TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &voice).await?,
         TTSMode::eSpeak => {
             espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?
         }
@@ -168,16 +162,6 @@ async fn get_tts(
                 text,
                 &voice,
                 speaking_rate.map(|r| r as u8),
-                preferred_format.as_deref(),
-            )
-            .await?
-        }
-        TTSMode::gCloud => {
-            gcloud::get_tts(
-                &state.gcloud,
-                &text,
-                &voice,
-                speaking_rate.unwrap_or(0.0),
                 preferred_format.as_deref(),
             )
             .await?
@@ -200,13 +184,15 @@ async fn get_tts(
     mode.into_response(audio, content_type)
 }
 
+async fn home() -> Html<&'static str> {
+    Html("<h1>Hello from tts-service!</h1>")
+}
+
 #[derive(serde::Deserialize, Clone, Copy, Debug)]
 #[allow(non_camel_case_types)]
 enum TTSMode {
-    gTTS,
     Polly,
     eSpeak,
-    gCloud,
 }
 
 impl TTSMode {
@@ -230,9 +216,7 @@ impl TTSMode {
 
     async fn check_voice(self, state: &State, voice: &str) -> ResponseResult<()> {
         if match self {
-            Self::gTTS => gtts::check_voice(voice),
             Self::eSpeak => espeak::check_voice(voice),
-            Self::gCloud => gcloud::check_voice(&state.gcloud, voice).await?,
             Self::Polly => polly::check_voice(&state.polly, voice).await?,
         } {
             Ok(())
@@ -245,9 +229,8 @@ impl TTSMode {
 
     fn check_length(self, audio: &[u8], max_length: Option<u64>) -> ResponseResult<()> {
         if max_length.map_or(true, |max_length| match self {
-            Self::gTTS => check_mp3_length(audio, max_length),
             Self::eSpeak => espeak::check_length(audio, max_length as u32),
-            Self::gCloud | Self::Polly => true,
+            Self::Polly => true,
         }) {
             Ok(())
         } else {
@@ -269,19 +252,15 @@ impl TTSMode {
 
     const fn max_speaking_rate(self) -> Option<f32> {
         match self {
-            Self::gTTS => None,
             Self::Polly => Some(500.0),
             Self::eSpeak => Some(400.0),
-            Self::gCloud => Some(4.0),
         }
     }
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::gTTS => "gTTS",
             Self::Polly => "Polly",
             Self::eSpeak => "eSpeak",
-            Self::gCloud => "gCloud",
         }
     }
 }
@@ -313,8 +292,6 @@ struct State {
 
     redis: Option<RedisCache>,
     polly: polly::State,
-    gtts: tokio::sync::RwLock<gtts::State>,
-    gcloud: tokio::sync::RwLock<gcloud::State>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -334,21 +311,12 @@ async fn main() -> Result<()> {
         .with(fmt_layer)
         .with(filter)
         .init();
-
-    let ip_block = match std::env::var("IPV6_BLOCK") {
-        Ok(ip_block) if &ip_block == "DISABLE" => None,
-        Ok(ip_block) => Some(ip_block.parse().expect("Invalid IPV6 Block!")),
-        _ => panic!("IPV6_BLOCK not set! Set to \"DISABLE\" to disable rate limit bypass"),
-    };
-
     let client = reqwest::Client::new();
     let redis_uri = std::env::var("REDIS_URI").ok();
     let has_redis_uri = redis_uri.is_some();
     let result = STATE.set(State {
         reqwest: client.clone(),
-        gcloud: gcloud::State::new(client)?,
         polly: polly::State::new(&aws_config::load_from_env().await),
-        gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
 
         auth_key: std::env::var("AUTH_KEY").ok().map(str_to_fixedstring),
         translation_key: std::env::var("DEEPL_KEY").ok().map(str_to_fixedstring),
@@ -367,6 +335,7 @@ async fn main() -> Result<()> {
     }
 
     let app = axum::Router::new()
+        .route("/", get(home))
         .route("/tts", get(get_tts))
         .route("/voices", get(get_voices))
         .route("/translation_languages", get(get_translation_languages))
@@ -374,10 +343,8 @@ async fn main() -> Result<()> {
             "/modes",
             get(|| async {
                 axum::Json([
-                    TTSMode::gTTS,
                     TTSMode::Polly,
                     TTSMode::eSpeak,
-                    TTSMode::gCloud,
                 ])
             }),
         );

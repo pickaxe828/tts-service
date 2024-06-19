@@ -1,11 +1,10 @@
 # TTS-service
 
-HTTP microservice using Axum to generate TTS from an HTTP reqwest.
+HTTP microservice using Axum to generate TTS from an HTTP reqwest. <br/>
+This fork exclusively uses Polly from AWS. Codes for gTTS and gCloud has been cruelly removed D:
 
 ## Modes
 - eSpeak - Local TTS, low quality. Returns WAV audio.
-- gTTS - Cloud TTS, medium quality. Returns MP3 audio
-- gcloud - Google Cloud TTS, high quality. Returns OPUS audio. **Requires a gCloud API key**
 - Polly - Amazon Polly TTS, high quality. Returns OggVorbis audio. **Requires Amazon Polly credentials**
 
 ## Supported endpoints:
@@ -35,12 +34,6 @@ A human readable message describing the error
 - `REDIS_URI` - The URI of a redis instance to cache requests with
 
 - `CACHE_KEY` - Fernet encryption key to use to encrypt audio data
-
-### gTTS Required
-- `IPV6_BLOCK` - A block of IPv6 addresses, randomly selected for each gTTS request
-
-### gCloud Required
-- `GOOGLE_APPLICATION_CREDENTIALS` - The file path to the gCloud JSON
 
 ### Polly Required
 - `AWS_REGION` - The AWS region to use
