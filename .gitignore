@@ -3,3 +3,6 @@ tts-service
 /target
 .*
 tts-service.sh
+
+**/node_modules
+**/*.ogg

@@ -22,6 +22,8 @@ mod polly;
 mod translation;
 mod wadiwayan;
 
+mod test;
+
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
 

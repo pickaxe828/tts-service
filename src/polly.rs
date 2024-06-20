@@ -67,15 +67,23 @@ pub async fn get_tts(
     speaking_rate: Option<u8>,
     preferred_format: Option<&str>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
-    let text = if let Some(speaking_rate) = speaking_rate {
+    // Wadiwayan text processing
+    // Check if trigger exists in text
+    let wadiwayan_trigger = text.contains("w/`");
+    let mut text = text.into_string();
+    if wadiwayan_trigger {
+        text = wadiwayan::process(text);
+    }
+    // speaking_rate processing
+    text = if let Some(speaking_rate) = speaking_rate {
         format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>")
     } else {
-        text.into_string()
+        text
     };
 
     let resp = state
         .synthesize_speech()
-        .set_text_type(Some(if speaking_rate.is_some() {
+        .set_text_type(Some(if speaking_rate.is_some() || wadiwayan_trigger {
             TextType::Ssml
         } else {
             TextType::Text
