@@ -17,7 +17,6 @@ use small_fixed_array::{FixedString, ValidLength};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod espeak;
 mod polly;
 mod translation;
 mod wadiwayan;
@@ -48,12 +47,10 @@ async fn get_voices(
 
     Ok(axum::Json(if raw {
         match mode {
-            TTSMode::eSpeak => to_value(espeak::get_voices()),
             TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
         }?
     } else {
         to_value(match mode {
-            TTSMode::eSpeak => espeak::get_voices().to_vec(),
             TTSMode::Polly => polly::get_voices(&state.polly).await?,
         })?
     }))
@@ -155,9 +152,6 @@ async fn get_tts(
     };
 
     let (audio, content_type) = match mode {
-        TTSMode::eSpeak => {
-            espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?
-        }
         TTSMode::Polly => {
             polly::get_tts(
                 &state.polly,
@@ -194,7 +188,6 @@ async fn home() -> Html<&'static str> {
 #[allow(non_camel_case_types)]
 enum TTSMode {
     Polly,
-    eSpeak,
 }
 
 impl TTSMode {
@@ -218,7 +211,6 @@ impl TTSMode {
 
     async fn check_voice(self, state: &State, voice: &str) -> ResponseResult<()> {
         if match self {
-            Self::eSpeak => espeak::check_voice(voice),
             Self::Polly => polly::check_voice(&state.polly, voice).await?,
         } {
             Ok(())
@@ -231,7 +223,6 @@ impl TTSMode {
 
     fn check_length(self, audio: &[u8], max_length: Option<u64>) -> ResponseResult<()> {
         if max_length.map_or(true, |max_length| match self {
-            Self::eSpeak => espeak::check_length(audio, max_length as u32),
             Self::Polly => true,
         }) {
             Ok(())
@@ -255,14 +246,12 @@ impl TTSMode {
     const fn max_speaking_rate(self) -> Option<f32> {
         match self {
             Self::Polly => Some(500.0),
-            Self::eSpeak => Some(400.0),
         }
     }
 
     fn as_str(self) -> &'static str {
         match self {
             Self::Polly => "Polly",
-            Self::eSpeak => "eSpeak",
         }
     }
 }
@@ -346,7 +335,6 @@ async fn main() -> Result<()> {
             get(|| async {
                 axum::Json([
                     TTSMode::Polly,
-                    TTSMode::eSpeak,
                 ])
             }),
         );
